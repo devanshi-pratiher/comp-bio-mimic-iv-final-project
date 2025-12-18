@@ -1,0 +1,305 @@
+
+-- FINAL COHORT (MIMIC-IV v2.2 BigQuery) using AVAILABLE TABLES
+-- Produces one row per ICU stay (stay_id)
+
+WITH base AS (
+  SELECT
+    stay_id,
+    subject_id,
+    hadm_id,
+
+    icu_intime,
+    icu_outtime,
+    SAFE_CAST(los_icu AS FLOAT64) AS los_icu_days,
+
+    admittime,
+    dischtime,
+
+    gender,
+    admission_age,
+    race,
+
+    hospital_expire_flag,
+
+    -- from icustay_detail (already nicely curated)
+    first_icu_stay
+
+  FROM `physionet-data.mimiciv_2_2_derived.icustay_detail`
+  WHERE admission_age >= 18
+    AND first_icu_stay = TRUE
+),
+
+-- ============================
+-- Mortality labels from hosp.admissions (has deathtime)
+-- ============================
+mort AS (
+  SELECT
+    hadm_id,
+    deathtime
+  FROM `physionet-data.mimiciv_2_2_hosp.admissions`
+),
+
+base2 AS (
+  SELECT
+    b.*,
+    m.deathtime,
+
+    -- death within 30 days of ICU admission
+    CASE
+      WHEN m.deathtime IS NOT NULL
+       AND m.deathtime <= DATETIME_ADD(b.icu_intime, INTERVAL 30 DAY)
+      THEN 1 ELSE 0
+    END AS death_30d,
+
+    -- death within 48 hours of ICU admission
+    CASE
+      WHEN m.deathtime IS NOT NULL
+       AND m.deathtime <= DATETIME_ADD(b.icu_intime, INTERVAL 48 HOUR)
+      THEN 1 ELSE 0
+    END AS death_48h
+  FROM base b
+  LEFT JOIN mort m
+    ON b.hadm_id = m.hadm_id
+),
+
+-- ============================
+-- FIRST-DAY VITALS (already aggregated)
+-- ============================
+vit AS (
+  SELECT
+    stay_id,
+    heart_rate_mean,
+    sbp_mean,
+    dbp_mean,
+    mbp_mean,
+    resp_rate_mean,
+    CAST(temperature_mean AS FLOAT64) AS temperature_mean,
+    spo2_mean,
+    glucose_mean
+  FROM `physionet-data.mimiciv_2_2_derived.first_day_vitalsign`
+),
+
+-- ============================
+-- FIRST-DAY LABS (table stores min/max; we’ll take max to mirror your working query)
+-- If you prefer mean, we can switch later.
+-- ============================
+labs AS (
+  SELECT
+    stay_id,
+
+    platelets_max,
+    wbc_max,
+    hemoglobin_max,
+    hematocrit_max,
+
+    creatinine_max,
+    bun_max,
+    sodium_max,
+    potassium_max,
+    chloride_max,
+    bicarbonate_max,
+    aniongap_max,
+    calcium_max,
+
+    bilirubin_total_max AS bilirubin_max,
+    alt_max,
+    alp_max,
+    ast_max,
+
+    inr_max,
+    pt_max,
+    ptt_max
+  FROM `physionet-data.mimiciv_2_2_derived.first_day_lab`
+),
+
+-- ============================
+-- FIRST-DAY BLOOD GAS (p/f ratio)
+-- ============================
+bg AS (
+  SELECT
+    stay_id,
+    pao2fio2ratio_max
+  FROM `physionet-data.mimiciv_2_2_derived.first_day_bg`
+),
+
+-- ============================
+-- HEIGHT / WEIGHT / URINE OUTPUT
+-- ============================
+ht AS (
+  SELECT stay_id, height
+  FROM `physionet-data.mimiciv_2_2_derived.first_day_height`
+),
+wt AS (
+  SELECT stay_id, weight
+  FROM `physionet-data.mimiciv_2_2_derived.first_day_weight`
+),
+ur AS (
+  SELECT stay_id, urineoutput
+  FROM `physionet-data.mimiciv_2_2_derived.first_day_urine_output`
+),
+
+-- ============================
+-- SEVERITY SCORES (available in your dataset)
+-- ============================
+scores AS (
+  SELECT
+    aps.stay_id,
+    aps.apsiii,
+    sofa.sofa,
+    gcs.gcs_min,
+    oas.oasis,
+    lod.lods
+  FROM `physionet-data.mimiciv_2_2_derived.apsiii` aps
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.first_day_sofa` sofa
+    ON aps.stay_id = sofa.stay_id
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.first_day_gcs` gcs
+    ON aps.stay_id = gcs.stay_id
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.oasis` oas
+    ON aps.stay_id = oas.stay_id
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.lods` lod
+    ON aps.stay_id = lod.stay_id
+),
+
+-- ============================
+-- RRT FLAG (first-day)
+-- ============================
+rrt AS (
+  SELECT
+    stay_id,
+    dialysis_present,
+    dialysis_active,
+    dialysis_type,
+    CASE WHEN dialysis_present = 1 OR dialysis_active = 1 THEN 1 ELSE 0 END AS rrt_flag
+  FROM `physionet-data.mimiciv_2_2_derived.first_day_rrt`
+),
+
+-- ============================
+-- INVASIVE LINES (this is where your CVC proxy comes from)
+-- ============================
+lines AS (
+  SELECT
+    stay_id,
+    line_type,
+    line_site,
+    starttime,
+    endtime
+  FROM `physionet-data.mimiciv_2_2_derived.invasive_line`
+),
+
+cvc_first AS (
+  SELECT
+    stay_id,
+    MIN(starttime) AS cvc_start
+  FROM lines
+  WHERE line_type IN ('Multi Lumen', 'PICC', 'Dialysis')
+  GROUP BY stay_id
+),
+
+art_first AS (
+  SELECT
+    stay_id,
+    MIN(starttime) AS art_start
+  FROM lines
+  WHERE line_type = 'Arterial'
+  GROUP BY stay_id
+)
+
+-- ============================
+-- FINAL ASSEMBLY
+-- ============================
+SELECT
+  b2.stay_id,
+  b2.subject_id,
+  b2.hadm_id,
+
+  b2.icu_intime,
+  b2.icu_outtime,
+  b2.los_icu_days,
+
+  b2.admittime,
+  b2.dischtime,
+
+  b2.gender,
+  b2.admission_age,
+  b2.race,
+
+  b2.hospital_expire_flag,
+  b2.deathtime,
+  b2.death_30d,
+
+  -- Exclusion flag you can apply in Python too
+  b2.death_48h,
+
+  -- Vitals
+  vit.heart_rate_mean,
+  vit.sbp_mean,
+  vit.dbp_mean,
+  vit.mbp_mean,
+  vit.resp_rate_mean,
+  vit.temperature_mean,
+  vit.spo2_mean,
+  vit.glucose_mean,
+
+  -- Labs
+  labs.platelets_max,
+  labs.wbc_max,
+  labs.hemoglobin_max,
+  labs.hematocrit_max,
+  labs.creatinine_max,
+  labs.bun_max,
+  labs.sodium_max,
+  labs.potassium_max,
+  labs.chloride_max,
+  labs.bicarbonate_max,
+  labs.aniongap_max,
+  labs.calcium_max,
+  labs.bilirubin_max,
+  labs.alt_max,
+  labs.alp_max,
+  labs.ast_max,
+  labs.inr_max,
+  labs.pt_max,
+  labs.ptt_max,
+
+  -- Blood gas
+  bg.pao2fio2ratio_max,
+
+  -- Urine/anthropometrics
+  ur.urineoutput,
+  ht.height,
+  wt.weight,
+
+  -- Scores
+  scores.apsiii,
+  scores.sofa,
+  scores.gcs_min,
+  scores.oasis,
+  scores.lods,
+
+  -- RRT
+  rrt.rrt_flag,
+  rrt.dialysis_type,
+
+  -- Line timing features (CVC proxy + arterial)
+  cvc_first.cvc_start,
+  art_first.art_start,
+
+  -- LOS before line placement (hours)
+  SAFE_DIVIDE(DATETIME_DIFF(cvc_first.cvc_start, b2.icu_intime, MINUTE), 60.0) AS stay_before_cvc_hours,
+  SAFE_DIVIDE(DATETIME_DIFF(art_first.art_start, b2.icu_intime, MINUTE), 60.0) AS stay_before_art_hours
+
+FROM base2 b2
+LEFT JOIN vit       ON b2.stay_id = vit.stay_id
+LEFT JOIN labs      ON b2.stay_id = labs.stay_id
+LEFT JOIN bg        ON b2.stay_id = bg.stay_id
+LEFT JOIN ur        ON b2.stay_id = ur.stay_id
+LEFT JOIN ht        ON b2.stay_id = ht.stay_id
+LEFT JOIN wt        ON b2.stay_id = wt.stay_id
+LEFT JOIN scores    ON b2.stay_id = scores.stay_id
+LEFT JOIN rrt       ON b2.stay_id = rrt.stay_id
+LEFT JOIN cvc_first ON b2.stay_id = cvc_first.stay_id
+LEFT JOIN art_first ON b2.stay_id = art_first.stay_id
+
+-- optional: match your earlier exclusion
+WHERE b2.death_48h = 0
+;
