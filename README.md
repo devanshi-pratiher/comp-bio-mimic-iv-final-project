@@ -40,7 +40,7 @@ pip install -r requirements.txt
 |------|--------|-------|---------|-------------|
 | Infection | AUC | 0.812 | **0.886** | +9.1% |
 | Survival | C-index | 0.777 | **0.843** | +8.5% |
-| Temporal Drop | - | N/A | **0.8680** | Novel |
+| Temporal Drop | AUC | N/A | **0.8680** | Novel |
 
 ## Citation
 
