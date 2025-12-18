@@ -32,7 +32,8 @@ pip install -r requirements.txt
 
 1. Extract data from BigQuery using SQL scripts in `sql/`
 2. Run notebooks in order: `01_bigquery_data_extraction.ipynb` → `08_figure_generation.ipynb`
-3. Trained models are in `models/` directory
+3. 30 Day Mortality Prediction models are in the respective directory
+4. Infection Prediction models were too large to be uploaded on GitHub
 
 ## Results
 
