@@ -1,0 +1,118 @@
+-- MEAN lab values for first 24 hours of ICU stay 
+
+WITH icu_stays AS (
+  SELECT stay_id, subject_id, intime_hr, outtime_hr
+  FROM `physionet-data.mimiciv_2_2_derived.icustay_times`
+),
+
+cbc_mean AS (
+  SELECT 
+    ie.stay_id,
+    AVG(cbc.hematocrit) AS hematocrit_mean,
+    AVG(cbc.hemoglobin) AS hemoglobin_mean,
+    AVG(cbc.platelet) AS platelets_mean,
+    AVG(cbc.rbc) AS rbc_mean,
+    AVG(cbc.wbc) AS wbc_mean
+  FROM icu_stays ie
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.complete_blood_count` cbc
+    ON cbc.subject_id = ie.subject_id
+    AND cbc.charttime >= DATETIME_SUB(ie.intime_hr, INTERVAL 6 HOUR)
+    AND cbc.charttime <= DATETIME_ADD(ie.intime_hr, INTERVAL 1 DAY)
+  GROUP BY ie.stay_id
+),
+
+chem_mean AS (
+  SELECT 
+    ie.stay_id,
+    AVG(ch.aniongap) AS aniongap_mean,
+    AVG(ch.bicarbonate) AS bicarbonate_mean,
+    AVG(ch.bun) AS bun_mean,
+    AVG(ch.calcium) AS calcium_mean,
+    AVG(ch.chloride) AS chloride_mean,
+    AVG(ch.creatinine) AS creatinine_mean,
+    AVG(ch.sodium) AS sodium_mean,
+    AVG(ch.potassium) AS potassium_mean,
+    AVG(ch.glucose) AS glucose_mean
+  FROM icu_stays ie
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.chemistry` ch
+    ON ch.subject_id = ie.subject_id
+    AND ch.charttime >= DATETIME_SUB(ie.intime_hr, INTERVAL 6 HOUR)
+    AND ch.charttime <= DATETIME_ADD(ie.intime_hr, INTERVAL 1 DAY)
+  GROUP BY ie.stay_id
+),
+
+coag_mean AS (
+  SELECT 
+    ie.stay_id,
+    AVG(cg.inr) AS inr_mean,
+    AVG(cg.pt) AS pt_mean,
+    AVG(cg.ptt) AS ptt_mean
+  FROM icu_stays ie
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.coagulation` cg
+    ON cg.subject_id = ie.subject_id
+    AND cg.charttime >= DATETIME_SUB(ie.intime_hr, INTERVAL 6 HOUR)
+    AND cg.charttime <= DATETIME_ADD(ie.intime_hr, INTERVAL 1 DAY)
+  GROUP BY ie.stay_id
+),
+
+enzyme_mean AS (
+  SELECT 
+    ie.stay_id,
+    AVG(en.alt) AS alt_mean,
+    AVG(en.alp) AS alp_mean,
+    AVG(en.ast) AS ast_mean
+  FROM icu_stays ie
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.enzyme` en
+    ON en.subject_id = ie.subject_id
+    AND en.charttime >= DATETIME_SUB(ie.intime_hr, INTERVAL 6 HOUR)
+    AND en.charttime <= DATETIME_ADD(ie.intime_hr, INTERVAL 1 DAY)
+  GROUP BY ie.stay_id
+),
+
+bg_mean AS (
+  SELECT 
+    ie.stay_id,
+    AVG(bg.pao2fio2ratio) AS pao2fio2ratio_mean
+  FROM icu_stays ie
+  LEFT JOIN `physionet-data.mimiciv_2_2_derived.bg` bg
+    ON bg.subject_id = ie.subject_id
+    AND bg.charttime >= DATETIME_SUB(ie.intime_hr, INTERVAL 6 HOUR)
+    AND bg.charttime <= DATETIME_ADD(ie.intime_hr, INTERVAL 1 DAY)
+  GROUP BY ie.stay_id
+)
+
+SELECT 
+  ie.stay_id,
+  -- CBC
+  cbc.hematocrit_mean,
+  cbc.hemoglobin_mean,
+  cbc.platelets_mean,
+  cbc.rbc_mean,
+  cbc.wbc_mean,
+  -- Chemistry
+  ch.aniongap_mean,
+  ch.bicarbonate_mean,
+  ch.bun_mean,
+  ch.calcium_mean,
+  ch.chloride_mean,
+  ch.creatinine_mean,
+  ch.sodium_mean,
+  ch.potassium_mean,
+  ch.glucose_mean,
+  -- Coagulation
+  cg.inr_mean,
+  cg.pt_mean,
+  cg.ptt_mean,
+  -- Enzymes
+  en.alt_mean,
+  en.alp_mean,
+  en.ast_mean,
+  -- Blood gas
+  bg.pao2fio2ratio_mean
+FROM icu_stays ie
+LEFT JOIN cbc_mean cbc ON ie.stay_id = cbc.stay_id
+LEFT JOIN chem_mean ch ON ie.stay_id = ch.stay_id
+LEFT JOIN coag_mean cg ON ie.stay_id = cg.stay_id
+LEFT JOIN enzyme_mean en ON ie.stay_id = en.stay_id
+LEFT JOIN bg_mean bg ON ie.stay_id = bg.stay_id
+ORDER BY ie.stay_id
